@@ -3,6 +3,10 @@ from typing import BinaryIO
 from collections import defaultdict
 import regex as re
 import tqdm
+import multiprocessing
+import gc
+import traceback
+
 
 class TokenizerTrainer:
     def __init__(self, input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str], 
@@ -23,6 +27,7 @@ class TokenizerTrainer:
         for i in range(len(special_tokens)):
             self.vocab[256+i] = special_tokens[i].encode("utf-8")
         self.merges = []
+        self.chunk_multiplier = 10
 
         self.pretokens = dict()
         self.pretokens_index = dict()
@@ -108,6 +113,79 @@ class TokenizerTrainer:
 
         return self.vocab, self.merges
 
+    def train_bpe_pool(self):
+        num_chunks = self.processor_num * self.chunk_multiplier
+        with open(self.input_path, "rb") as f:
+            boundaries = self.find_chunk_boundaries(f, num_chunks, b"<|endoftext|>")
+
+        pool = multiprocessing.Pool(self.processor_num)
+
+        tasks = []
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            tasks.append((self.input_path, start, end, self.special_tokens))
+
+        print(f"Starting {len(tasks)} tasks with {self.processor_num} processors")
+
+        pbar = tqdm.tqdm(total=len(tasks), desc="Pretokenizing & Merging")
+        gc.disable()
+
+        self.token_freqs = dict()
+        for worker_result in pool.imap_unordered(TokenizerTrainer.pretokenize_file_offset, tasks):
+            if worker_result:
+                self._incremental_merge(worker_result)
+            pbar.update(1)
+
+        pbar.close()
+        pool.close()
+        pool.join()
+
+        self.pretokens = {i: [token, count] for i, (token, count) in enumerate(self.token_freqs.items())}
+
+        del self.token_freqs
+        gc.enable()
+        gc.collect()
+
+        print("Initializing BP frequencies...")
+        self.init_bp_freq()
+
+        for i in tqdm.tqdm(range(self.vocab_size - len(self.vocab)), desc="Merge byte pairs"):
+            self.merge_bpe()
+
+        return self.vocab, self.merges
+
+
+    def _incremental_merge(self, pretokens: dict[tuple, int]):
+        for token, count in pretokens.items():
+            if token in self.token_freqs:
+                self.token_freqs[token] += count
+            else:
+                self.token_freqs[token] = count
+
+    @staticmethod
+    def pretokenize_file_offset(args):
+        file_path, start, end, special_tokens_list = args
+        try:
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                chunk_str = f.read(end - start).decode("utf-8", errors="ignore")
+            pretokens = {}
+            delimiters = "|".join(special_tokens_list)
+            PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+            splited_chunk = re.split(delimiters, chunk_str)
+            for seg in splited_chunk:
+                tokens = re.finditer(PAT, seg)
+                for token in tokens:
+                    pretoken = tuple(token.group().encode("utf-8"))
+                    if pretoken not in pretokens:
+                        pretokens[pretoken] = 0
+                    pretokens[pretoken] += 1
+            return pretokens
+        except Exception as e:
+            print(f"Error in process {os.getpid()}: {e}")
+            print(traceback.format_exc())
+            return None
+
+
     def init_bp_freq(self):
         for pretoken_idx, pretoken_data in tqdm.tqdm(self.pretokens.items(), desc="Initializing BP frequency"):
             pretoken, pretoken_cnt = pretoken_data
@@ -176,3 +254,23 @@ class TokenizerTrainer:
                 i += 1
 
             self.pretokens[pretoken_idx][0] = new_pretoken
+
+if __name__ == "__main__":
+    tokenizer = TokenizerTrainer(
+        "../data/TinyStoriesV2-GPT4-train.txt",
+        10000,
+        ["<|endoftext|>"],
+        4
+    )
+
+    # vocab, merges = tokenizer.train_bpe()
+    vocab, merges = tokenizer.train_bpe_pool()
+
+    max_len = 0
+    max_idx = -1
+    for idx, token in vocab.items():
+        if len(token) > max_len:
+            max_len = len(token)
+            max_idx = idx
+    print(max_idx, max_len, vocab[max_idx])
+
