@@ -6,6 +6,8 @@ import tqdm
 import multiprocessing
 import gc
 import traceback
+import pickle
+from typing import Iterable
 
 
 class TokenizerTrainer:
@@ -254,6 +256,177 @@ class TokenizerTrainer:
                 i += 1
 
             self.pretokens[pretoken_idx][0] = new_pretoken
+
+class Tokenizer:
+    def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens=None):
+        self.vocab = vocab
+        self.vocab_to_index = {v: k for k, v in vocab.items()} if isinstance(vocab, dict) else vocab
+        self.merges = merges
+        self.special_tokens = special_tokens
+        self.PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+        if isinstance(special_tokens, list):
+            if "<|endoftext|>" not in special_tokens:
+                special_tokens.append("<|endoftext|>")
+            special_tokens = sorted(special_tokens, key=len, reverse=True)
+            for special_token in special_tokens:
+                if special_token.encode("utf-8") not in self.vocab_to_index:
+                    self.vocab_to_index[special_token.encode("utf-8")] = len(self.vocab)
+                    self.vocab[len(self.vocab)] = special_token.encode("utf-8")
+        self.special_tokens = special_tokens
+
+    @classmethod
+    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens=None):
+        vocab = cls.load_from_pickle(vocab_filepath)
+        merges = cls.load_from_pickle(merges_filepath)
+        return cls(vocab, merges, special_tokens)
+
+
+    @classmethod
+    def load_from_pickle(cls, file_path: str):
+        try:
+            with open(file_path, "rb") as f:
+                data = pickle.load(f)
+            return data
+        except FileNotFoundError:
+            print(f"File {file_path} not found")
+            return None
+        except Exception as e:
+            print(f"Error loading pickle file {file_path}: {e}")
+            return None
+
+    def encode(self, text: str):
+        pretokens, pretokens_seq, special_tokens_list = self.pretokenize(text)
+        pretokens = self.merge(pretokens)
+        pretokens_to_ids = {}
+        token_ids = []
+        for pretoken, pretoken_res in pretokens.items():
+            pretoken_ids = []
+            for byte in pretoken_res:
+                pretoken_ids.append(self.vocab_to_index[byte])
+            pretokens_to_ids[pretoken] = pretoken_ids
+        for special_token in special_tokens_list:
+            if special_token not in pretokens_to_ids:
+                pretokens_to_ids[special_token] = [self.vocab_to_index[special_token.encode("utf-8")]]
+        for pretoken in pretokens_seq:
+            token_ids.extend(pretokens_to_ids[pretoken])
+        return token_ids
+
+    def decode(self, ids: list[int]):
+        decode_bytes = b""
+        for id in ids:
+            decode_bytes += self.vocab[id]
+        decode_str = decode_bytes.decode("utf-8", errors="replace")
+        return decode_str
+
+    def encode_iterable(self, iterable: Iterable[int]):
+        chunk_size = int(1 * 1024 ** 2)
+        file_pos = 0
+        while True:
+            chunk = iterable.read(chunk_size)
+            pos = iterable.tell()
+
+            if not chunk:
+                break
+
+            is_last_chunk = len(chunk) < chunk_size
+            original_chunk = chunk
+            if not is_last_chunk:
+                if self.special_tokens:
+                    concat_special_tokens = "|".join([re.escape(special_token) for special_token in self.special_tokens])
+                    end_chunk = chunk[-2 * len(max(self.special_tokens, key=len)) :]
+                    matches = list(re.finditer(concat_special_tokens, end_chunk))
+                    if len(matches) > 0:
+                        chunk = chunk[:matches[0].span()[0]]
+                    else:
+                        chunk = chunk[:-len(max(self.special_tokens, key=len))]
+                        pretokens = re.findall(self.PAT, chunk)
+                        if pretokens:
+                            endtoken_len = len(pretokens[-1])
+                            chunk = chunk[:-endtoken_len]
+                else:
+                    pretokens = re.findall(self.PAT, chunk)
+                    if pretokens:
+                        endtoken_len = len(pretokens[-1])
+                        chunk = chunk[:-endtoken_len]
+
+                if not chunk:
+                    chunk = original_chunk
+            chunk_len = len(chunk)
+            if chunk_len == 0:
+                break
+            iterable.seek(file_pos)
+            iterable.read(chunk_len)
+            file_pos = iterable.tell()
+            iterable.seek(file_pos)
+            token_ids = self.encode(chunk)
+            for token_id in token_ids:
+                yield token_id
+
+    def pretokenize(self, text: str):
+        pretokens = dict()
+        pretokens_seq = []
+        special_tokens_seq = []
+        if self.special_tokens:
+            concat_special_tokens = "|".join([re.escape(special_token) for special_token in self.special_tokens])
+            splited_chunk = re.split(concat_special_tokens, text)
+            matches = re.finditer(concat_special_tokens, text)
+            special_tokens_seq = [match.group() for match in matches]
+        else:
+            splited_chunk = [text]
+        i = 0
+        for seq in splited_chunk:
+            pretoken_iter = re.finditer(self.PAT, seq)
+            for pretoken in pretoken_iter:
+                token = pretoken.group()
+                token_res = [bytes([byte]) for byte in token.encode("utf-8")]
+                if token not in pretokens:
+                    pretokens[token] = token_res
+                pretokens_seq.append(token)
+            if i < len(special_tokens_seq):
+                pretokens_seq.append(special_tokens_seq[i])
+            i += 1
+        return pretokens, pretokens_seq, special_tokens_seq
+
+    def merge(self, pretokens):
+        bp_to_pretoken = dict()
+        for pretoken, pretoken_res in pretokens.items():
+            i = 0
+            while i < len(pretoken_res) - 1:
+                bp = (pretoken_res[i], pretoken_res[i+1])
+                if bp not in bp_to_pretoken:
+                    bp_to_pretoken[bp] = set()
+                bp_to_pretoken[bp].add(pretoken)
+                i += 1
+
+        for merge in self.merges:
+            if merge not in bp_to_pretoken:
+                continue
+            merge_tokens = bp_to_pretoken[merge]
+            for merge_token in merge_tokens:
+                pretoken_res = pretokens[merge_token]
+                i = 0
+                while i < len(pretoken_res) - 1:
+                    bp = (pretoken_res[i], pretoken_res[i+1])
+                    if bp == merge:
+                        pretoken_res[i] = bp[0] + bp[1]
+                        pretoken_res.pop(i+1)
+                        if i > 0:
+                            bp_previous = (pretoken_res[i-1], pretoken_res[i])
+                            if bp_previous not in bp_to_pretoken:
+                                bp_to_pretoken[bp_previous] = {merge_token}
+                            else:
+                                bp_to_pretoken[bp_previous].add(merge_token)
+                        if i < len(pretoken_res) - 1:
+                            bp_next = (pretoken_res[i], pretoken_res[i+1])
+                            if bp_next not in bp_to_pretoken:
+                                bp_to_pretoken[bp_next] = {merge_token}
+                            else:
+                                bp_to_pretoken[bp_next].add(merge_token)
+                    i += 1
+                pretokens[merge_token] = pretoken_res
+        return pretokens
+
 
 if __name__ == "__main__":
     tokenizer = TokenizerTrainer(
