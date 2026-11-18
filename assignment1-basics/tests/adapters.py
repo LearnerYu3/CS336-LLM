@@ -10,6 +10,10 @@ import torch
 from torch import Tensor
 
 from cs336_basics.pretokenization import Tokenizer, TokenizerTrainer
+from cs336_basics.linear_module import Linear as MyLinear
+from cs336_basics.embedding import Embedding as MyEmbedding
+from cs336_basics.rmsnorm import RMSNorm as MyRMSNorm
+from cs336_basics.swiglu import SwiGLU as MySwiGLU
 
 def run_linear(
     d_in: int,
@@ -29,8 +33,18 @@ def run_linear(
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
+    device = in_features.device
+    dtype = in_features.dtype
 
-    raise NotImplementedError
+    layer = MyLinear(
+        in_features=d_in,
+        out_features=d_out,
+        device=device,
+        dtype=dtype,
+    )
+    layer.load_state_dict({"W": weights})
+    with torch.no_grad():
+        return layer(in_features)
 
 
 def run_embedding(
@@ -51,8 +65,19 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
+    device = token_ids.device
+    dtype = weights.dtype
 
-    raise NotImplementedError
+    layer = MyEmbedding(
+        num_embeddings=vocab_size,
+        embedding_dim=d_model,
+        device=device,
+        dtype=dtype,
+    )
+    layer.load_state_dict({"W": weights})
+
+    with torch.no_grad():
+        return layer(token_ids)
 
 
 def run_swiglu(
@@ -84,7 +109,24 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+
+    device = in_features.device
+    dtype = in_features.dtype
+    layer = MySwiGLU(
+        d_model=d_model,
+        d_ff=d_ff,
+        device=device,
+        dtype=dtype,
+    )
+
+    layer.load_state_dict({
+        "w1.W": w1_weight,
+        "w2.W": w2_weight,
+        "w3.W": w3_weight,
+    })
+
+    with torch.no_grad():
+        return layer(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -379,7 +421,19 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    device = weights.device
+    dtype = weights.dtype
+    layer = MyRMSNorm(
+        d_model=d_model,
+        eps=eps,
+        device=device,
+        dtype=dtype,
+    )
+
+    layer.load_state_dict({"W": weights})
+
+    with torch.no_grad():
+        return layer(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
