@@ -27,7 +27,7 @@ class Linear(nn.Module):
         self.d_in = in_features
         self.d_out = out_features
 
-        self.W = nn.Parameter(torch.empty(out_features, in_features, device=device, dtype=dtype))
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, device=device, dtype=dtype))
 
         self._reset_parameters()
 
@@ -35,7 +35,7 @@ class Linear(nn.Module):
         # Initialize the weight matrix drawing from N(0, 2/(in+out)), truncated normal distribution
         std = math.sqrt(2.0 / (self.d_in + self.d_out))
         nn.init.trunc_normal_(
-            self.W,
+            self.weight,
             mean=0.0,
             std=std,
             a=-3.0 * std,
@@ -52,4 +52,4 @@ class Linear(nn.Module):
         """
         # return einsum(x, self.W, "... in, out in -> ... out")
         # torch.einsum 的方程里每个维度必须是单个字母，"in" 被解析为 'i' + 'n' = 两个字母，可以使用 einops.einsum 代替
-        return torch.einsum("... i, o i -> ... o", x, self.W)
+        return torch.einsum("... i, o i -> ... o", x, self.weight)

@@ -22,7 +22,7 @@ class RMSNorm(torch.nn.Module):
         self.d_model = d_model
         self.eps = eps
 
-        self.W = torch.nn.Parameter(
+        self.weight = torch.nn.Parameter(
             torch.ones(d_model, device=device, dtype=dtype)
         )
 
@@ -42,4 +42,4 @@ class RMSNorm(torch.nn.Module):
         )
         x_normed = x / rms
 
-        return (x_normed * self.W).to(in_dtype)
+        return (x_normed * self.weight).to(in_dtype)

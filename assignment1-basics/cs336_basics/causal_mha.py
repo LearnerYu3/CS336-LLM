@@ -72,11 +72,11 @@ class CausalMultiHeadAttention(torch.nn.Module):
         self.d_v = d_model // num_heads
         self.max_seq_len = max_seq_len
 
-        self.w_q = Linear(d_model, d_model, device=device, dtype=dtype)
-        self.w_k = Linear(d_model, d_model, device=device, dtype=dtype)
-        self.w_v = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.q_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.k_proj = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.v_proj = Linear(d_model, d_model, device=device, dtype=dtype)
 
-        self.w_o = Linear(d_model, d_model, device=device, dtype=dtype)
+        self.output_proj = Linear(d_model, d_model, device=device, dtype=dtype)
 
         # RoPE 作用在 K 和 V 上
         self.rope = RotaryPositionalEmbedding(
@@ -103,9 +103,9 @@ class CausalMultiHeadAttention(torch.nn.Module):
         # ).expand(*batch_size, seq_len)
 
         # 投影 Q, K, V
-        q = self.w_q(x)
-        k = self.w_k(x)
-        v = self.w_v(x)
+        q = self.q_proj(x)
+        k = self.k_proj(x)
+        v = self.v_proj(x)
 
         # reshape -> (batch_size, ..., num_heads, seq_len, d_k)
         q = q.view(*batch_size, seq_len, self.num_heads, self.d_k)
@@ -135,4 +135,4 @@ class CausalMultiHeadAttention(torch.nn.Module):
             *batch_size, seq_len, self.d_model
         )
 
-        return self.w_o(attn_output)
+        return self.output_proj(attn_output)

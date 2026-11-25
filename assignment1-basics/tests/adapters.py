@@ -17,6 +17,8 @@ from cs336_basics.swiglu import SwiGLU as MySwiGLU
 from cs336_basics.rope import RotaryPositionalEmbedding as MyRoPE
 from cs336_basics.causal_mha import softmax, scaled_dot_product_attention
 from cs336_basics.causal_mha import CausalMultiHeadAttention as MyCausalMHA
+from cs336_basics.transformer_block import TransformerBlock as MyTransformerBlock
+from cs336_basics.transformer_lm import TransformerLM as MyTransformerLM
 
 def run_linear(
     d_in: int,
@@ -45,7 +47,7 @@ def run_linear(
         device=device,
         dtype=dtype,
     )
-    layer.load_state_dict({"W": weights})
+    layer.load_state_dict({"weight": weights})
     with torch.no_grad():
         return layer(in_features)
 
@@ -77,7 +79,7 @@ def run_embedding(
         device=device,
         dtype=dtype,
     )
-    layer.load_state_dict({"W": weights})
+    layer.load_state_dict({"weight": weights})
 
     with torch.no_grad():
         return layer(token_ids)
@@ -123,9 +125,9 @@ def run_swiglu(
     )
 
     layer.load_state_dict({
-        "w1.W": w1_weight,
-        "w2.W": w2_weight,
-        "w3.W": w3_weight,
+        "w1.weight": w1_weight,
+        "w2.weight": w2_weight,
+        "w3.weight": w3_weight,
     })
 
     with torch.no_grad():
@@ -196,10 +198,10 @@ def run_multihead_self_attention(
     )
 
     layer.load_state_dict({
-        "w_q.W": q_proj_weight,
-        "w_k.W": k_proj_weight,
-        "w_v.W": v_proj_weight,
-        "w_o.W": o_proj_weight,
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "output_proj.weight": o_proj_weight,
     })
 
     with torch.no_grad():
@@ -256,10 +258,10 @@ def run_multihead_self_attention_with_rope(
     )
 
     layer.load_state_dict({
-        "w_q.W": q_proj_weight,
-        "w_k.W": k_proj_weight,
-        "w_v.W": v_proj_weight,
-        "w_o.W": o_proj_weight,
+        "q_proj.weight": q_proj_weight,
+        "k_proj.weight": k_proj_weight,
+        "v_proj.weight": v_proj_weight,
+        "output_proj.weight": o_proj_weight,
     })
 
     with torch.no_grad():
@@ -367,7 +369,23 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    device = in_features.device
+    dtype = in_features.dtype
+    block = MyTransformerBlock(
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=theta,
+        max_seq_len=max_seq_len,
+        device=device,
+        dtype=dtype,
+        use_rope=True,
+    )
+
+    block.load_state_dict(weights)
+
+    with torch.no_grad():
+        return block(in_features)
 
 
 def run_transformer_lm(
@@ -449,7 +467,24 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+
+    device = in_indices.device
+
+    model = MyTransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta,
+        device=device,
+    )
+
+    model.load_state_dict(weights)
+
+    with torch.no_grad():
+        return model(in_indices)
 
 
 def run_rmsnorm(
@@ -481,7 +516,7 @@ def run_rmsnorm(
         dtype=dtype,
     )
 
-    layer.load_state_dict({"W": weights})
+    layer.load_state_dict({"weight": weights})
 
     with torch.no_grad():
         return layer(in_features)

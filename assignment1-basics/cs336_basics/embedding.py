@@ -21,7 +21,7 @@ class Embedding(torch.nn.Module):
         self.d_model = embedding_dim
         self.vocab_size = num_embeddings
 
-        self.W = torch.nn.Parameter(
+        self.weight = torch.nn.Parameter(
             torch.empty(num_embeddings, embedding_dim, device=device, dtype=dtype)
         )
 
@@ -31,7 +31,7 @@ class Embedding(torch.nn.Module):
         # Initialize the weight matrix drawing from N(0, 2/(in+out)), truncated normal distribution
         std = 1.0
         torch.nn.init.trunc_normal_(
-            self.W,
+            self.weight,
             mean=0.0,
             std=std,
             a=-3.0 * std,
@@ -46,6 +46,6 @@ class Embedding(torch.nn.Module):
         Returns:
             The embeddings.
         """
-        # self.W[token_ids] 不支持padding，需要手动处理padding
-        # F.embedding(token_ids, self.W, padding_idx=padding_idx) 处理会更好
-        return self.W[token_ids]
+        # self.weight[token_ids] 不支持padding，需要手动处理paddings
+        # F.embedding(token_ids, self.weight, padding_idx=padding_idx) 处理会更好
+        return self.weight[token_ids]
